@@ -1,4 +1,4 @@
-﻿<style>
+<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Fira+Code:wght@400;500&display=swap');
 
 * { box-sizing: border-box; }
@@ -218,30 +218,35 @@ The raw `superstore_raw` table suffered from the classic three database anomalie
   │    segment       │           │    region         │
   └────────┬─────────┘           │    state          │
            │ 1:N                 │    city           │
-           │                     │    postal_code    │
-  ┌────────▼─────────────────────┤                   │
-  │          orders              │ 1:N               │
-  ├──────────────────────────────┘                   │
-  │ PK order_id                  ◀───────────────────┘
-  │    order_date, ship_date
-  │    ship_mode
-  │ FK customer_id, region_id
-  └────────┬─────────┐
-           │ 1:N     │
-  ┌────────▼───────────────────┐   ┌──────────────────┐
-  │      sales (Fact)          │   │     products      │
-  ├────────────────────────────┤   ├──────────────────┤
-  │ PK,FK order_id             │   │ PK product_id     │
-  │ PK,FK product_id ◀─────────┤1:N│    product_name   │
-  │       sales                │   │    category       │
-  │       quantity             │   │    sub_category   │
-  │       discount, profit     │   └──────────────────┘
-  └────────────────────────────┘
+  │ PK customer_id   │           │ PK region_id     │
+  │    customer_name │           │    country       │
+  │    segment       │           │    region        │
+  └────────┬─────────┘           │    state         │
+           │ 1:N                 │    city          │
+           │                     │    postal_code   │
+  ┌────────▼─────────────────────┤                  │
+  │          orders              │ 1:N              │
+  ├──────────────────────────────┘                  │
+  │ PK order_id                  ◀──────────────────┘
+   │    order_date, ship_date
+   │    ship_mode
+   │ FK customer_id, region_id
+   └────────┬─────────┐
+            │ 1:N     │
+   ┌────────▼───────────────────┐   ┌──────────────────┐
+   │      sales (Fact)          │   │     products     │
+   ├────────────────────────────┤   ├──────────────────┤
+   │ PK,FK order_id             │   │ PK product_id    │
+   │ PK,FK product_id ◀─────────┤1:N│    product_name  │
+   │       sales                │   │    category      │
+   │       quantity             │   │    sub_category  │
+   │       discount, profit     │   └──────────────────┘
+   └────────────────────────────┘
 ```
 
 ---
 
-## 💻 SQL Business Analytics (30 Queries)
+## 💻 SQL Business Analytics — All 30 Queries
 
 | Tier | Queries | Focus Area |
 | :--- | :---: | :--- |
@@ -252,34 +257,270 @@ The raw `superstore_raw` table suffered from the classic three database anomalie
 | Geography & Discounts | 21–25 | Region/state/city breakdowns |
 | Advanced Analytics | 26–30 | Window functions, CTEs, LAG, running totals |
 
-### Sample: Top Product Per Category
+---
 
+### 📊 Tier 1 · Queries 1–5: High-Level Business KPIs
+
+**Query 1: Overall business performance**
+```sql
+SELECT ROUND(SUM(sales), 2)  AS total_revenue,
+       SUM(quantity)          AS total_units_sold,
+       ROUND(SUM(profit), 2)  AS total_profit
+FROM sales;
+```
+
+**Query 2: Database scale (independent subqueries)**
+```sql
+SELECT (SELECT COUNT(*) FROM customers) AS total_customers,
+       (SELECT COUNT(*) FROM products)  AS total_products,
+       (SELECT COUNT(*) FROM orders)    AS total_orders;
+```
+
+**Query 3 & 4: Average Order Value (AOV) & avg profit per order**
+```sql
+SELECT ROUND(SUM(sales) / COUNT(DISTINCT order_id), 2) AS average_order_value
+FROM sales;
+```
+
+**Query 5: Profit margin percentage**
+```sql
+SELECT ROUND((SUM(profit) / SUM(sales)) * 100, 2) AS profit_margin_percentage
+FROM sales;
+```
+
+---
+
+### 📦 Tier 2 · Queries 6–10: Category & Product Rankings
+
+**Query 6 & 7: Sales & profit by category / sub-category**
+```sql
+SELECT p.category,
+       ROUND(SUM(s.sales), 2)  AS total_sales,
+       ROUND(SUM(s.profit), 2) AS total_profit,
+       SUM(s.quantity)         AS units_sold
+FROM sales s
+JOIN products p ON s.product_id = p.product_id
+GROUP BY p.category
+ORDER BY total_sales DESC;
+```
+
+**Query 8, 9 & 10: Top 10 products by revenue / profit / quantity**
+```sql
+SELECT p.product_name,
+       ROUND(SUM(s.sales), 2) AS total_revenue
+FROM sales s
+JOIN products p ON s.product_id = p.product_id
+GROUP BY p.product_id, p.product_name
+ORDER BY total_revenue DESC
+LIMIT 10;
+```
+
+---
+
+### 📉 Tier 3 · Queries 11–15: Anomaly Checking & Customer Analysis
+
+**Query 11: Identifying loss-making products (HAVING on aggregates)**
+```sql
+SELECT p.product_name,
+       ROUND(SUM(s.profit), 2) AS total_loss
+FROM sales s
+JOIN products p ON s.product_id = p.product_id
+GROUP BY p.product_id, p.product_name
+HAVING SUM(s.profit) < 0
+ORDER BY total_loss ASC
+LIMIT 10;
+```
+
+**Query 12: Category contribution to total sales % (nested subquery)**
+```sql
+SELECT p.category,
+       ROUND(SUM(s.sales), 2) AS total_sales,
+       ROUND((SUM(s.sales) / (SELECT SUM(sales) FROM sales)) * 100, 2)
+                               AS sales_contribution_percent
+FROM sales s
+JOIN products p ON s.product_id = p.product_id
+GROUP BY p.category;
+```
+
+**Query 13 & 14: Top 10 customers by revenue / profit (three-table join)**
+```sql
+SELECT c.customer_name,
+       ROUND(SUM(s.sales), 2) AS total_revenue
+FROM sales s
+JOIN orders   o ON s.order_id    = o.order_id
+JOIN customers c ON o.customer_id = c.customer_id
+GROUP BY c.customer_id, c.customer_name
+ORDER BY total_revenue DESC
+LIMIT 10;
+```
+
+**Query 15: Customer segment analysis**
+```sql
+SELECT c.segment,
+       ROUND(SUM(s.sales), 2)         AS total_sales,
+       COUNT(DISTINCT c.customer_id)  AS total_customers
+FROM sales s
+JOIN orders    o ON s.order_id    = o.order_id
+JOIN customers c ON o.customer_id = c.customer_id
+GROUP BY c.segment;
+```
+
+---
+
+### 📅 Tier 4 · Queries 16–20: Temporal Trends & Customer Averages
+
+**Query 16: Average revenue per customer**
+```sql
+SELECT ROUND(SUM(s.sales) / COUNT(DISTINCT c.customer_id), 2) AS avg_revenue_per_customer
+FROM sales s
+JOIN orders    o ON s.order_id    = o.order_id
+JOIN customers c ON o.customer_id = c.customer_id;
+```
+
+**Query 17: Top customers by number of orders**
+```sql
+SELECT c.customer_name,
+       COUNT(o.order_id) AS total_orders
+FROM orders    o
+JOIN customers c ON o.customer_id = c.customer_id
+GROUP BY c.customer_id, c.customer_name
+ORDER BY total_orders DESC
+LIMIT 10;
+```
+
+**Query 18, 19 & 20: Yearly & monthly trends (YEAR / MONTH extraction)**
+```sql
+SELECT YEAR(o.order_date)  AS order_year,
+       MONTH(o.order_date) AS order_month,
+       ROUND(SUM(s.sales), 2) AS total_sales
+FROM orders o
+JOIN sales  s ON o.order_id = s.order_id
+GROUP BY YEAR(o.order_date), MONTH(o.order_date)
+ORDER BY order_year, order_month;
+```
+
+---
+
+### 🌍 Tier 5 · Queries 21–25: Geography & Pricing Discounts
+
+**Query 21, 22 & 23: Regional, state & city breakdowns**
+```sql
+SELECT r.city,
+       ROUND(SUM(s.sales), 2)  AS total_sales,
+       ROUND(SUM(s.profit), 2) AS total_profit
+FROM regions r
+JOIN orders o ON o.region_id = r.region_id
+JOIN sales  s ON o.order_id  = s.order_id
+GROUP BY r.city
+ORDER BY total_sales DESC
+LIMIT 10;
+```
+
+**Query 24: Discount impact on profit**
+```sql
+SELECT discount,
+       ROUND(SUM(sales), 2)  AS total_sales,
+       ROUND(SUM(profit), 2) AS total_profit
+FROM sales
+GROUP BY discount;
+```
+
+**Query 25: High-discount products (avg discount ≥ 30%)**
+```sql
+SELECT p.product_name,
+       ROUND(AVG(s.discount), 2) AS avg_discount,
+       ROUND(SUM(s.profit), 2)   AS total_profit
+FROM products p
+JOIN sales s ON p.product_id = s.product_id
+GROUP BY p.product_id, p.product_name
+HAVING AVG(s.discount) >= 0.30;
+```
+
+---
+
+### 🚀 Tier 6 · Queries 26–30: Advanced Window Functions, CTEs & LAG
+
+#### Ranking Functions — Quick Visual Comparison
+
+| Function | Tied Input | Output Ranks | Behavior |
+| :--- | :--- | :--- | :--- |
+| `ROW_NUMBER()` | A, A, B | 1, 2, 3 | Always unique — no ties |
+| `RANK()` | A, A, B | 1, 1, 3 | Ties share rank, skips next number |
+| `DENSE_RANK()` | A, A, B | 1, 1, 2 | Ties share rank, does NOT skip |
+
+**Query 26: Cumulative running total sales (SUM OVER)**
+```sql
+SELECT YEAR(o.order_date)  AS order_year,
+       MONTH(o.order_date) AS order_month,
+       ROUND(SUM(s.sales), 2) AS monthly_sales,
+       ROUND(SUM(SUM(s.sales)) OVER (
+           ORDER BY YEAR(o.order_date), MONTH(o.order_date)
+       ), 2) AS running_total_sales
+FROM orders o
+JOIN sales  s ON o.order_id = s.order_id
+GROUP BY YEAR(o.order_date), MONTH(o.order_date);
+```
+
+**Query 27: Rank all products by total sales (RANK OVER)**
+```sql
+SELECT p.product_name,
+       ROUND(SUM(s.sales)) AS total_sales,
+       RANK() OVER (ORDER BY SUM(s.sales) DESC) AS sales_rank
+FROM products p
+JOIN sales s ON p.product_id = s.product_id
+GROUP BY p.product_id, p.product_name;
+```
+
+**Query 28: Top product in each category (DENSE_RANK + CTE + PARTITION BY)**
 ```sql
 WITH product_sales AS (
-    SELECT p.category, p.product_name,
+    SELECT p.category,
+           p.product_name,
            ROUND(SUM(s.sales), 2) AS total_sales,
-           DENSE_RANK() OVER (PARTITION BY p.category
-                              ORDER BY SUM(s.sales) DESC) AS rnk
-    FROM products p JOIN sales s ON p.product_id = s.product_id
+           DENSE_RANK() OVER (
+               PARTITION BY p.category
+               ORDER BY SUM(s.sales) DESC
+           ) AS sales_rank
+    FROM products p
+    JOIN sales s ON p.product_id = s.product_id
     GROUP BY p.category, p.product_id, p.product_name
 )
 SELECT category, product_name, total_sales
-FROM   product_sales WHERE rnk = 1;
+FROM product_sales
+WHERE sales_rank = 1;
 ```
 
-### Sample: Month-over-Month Growth
-
+**Query 29: Month-over-Month sales growth (LAG)**
 ```sql
-WITH monthly AS (
-    SELECT YEAR(o.order_date) yr, MONTH(o.order_date) mo,
-           ROUND(SUM(s.sales), 2) total_sales
-    FROM orders o JOIN sales s ON o.order_id = s.order_id
-    GROUP BY yr, mo
+WITH monthly_sales AS (
+    SELECT YEAR(o.order_date)  AS order_year,
+           MONTH(o.order_date) AS order_month,
+           ROUND(SUM(s.sales), 2) AS total_sales
+    FROM orders o
+    JOIN sales  s ON o.order_id = s.order_id
+    GROUP BY YEAR(o.order_date), MONTH(o.order_date)
 )
-SELECT yr, mo, total_sales,
-       LAG(total_sales) OVER (ORDER BY yr, mo)                        prev_sales,
-       ROUND(total_sales - LAG(total_sales) OVER (ORDER BY yr, mo),2) mom_diff
-FROM monthly ORDER BY yr, mo;
+SELECT order_year,
+       order_month,
+       total_sales,
+       LAG(total_sales) OVER (ORDER BY order_year, order_month) AS previous_month_sales,
+       ROUND(total_sales
+             - LAG(total_sales) OVER (ORDER BY order_year, order_month), 2) AS sales_difference
+FROM monthly_sales
+ORDER BY order_year, order_month;
+```
+
+**Query 30: Top 10 highest-revenue orders**
+```sql
+SELECT o.order_id,
+       c.customer_name,
+       ROUND(SUM(s.sales)) AS total_order_value
+FROM orders    o
+JOIN customers c ON o.customer_id = c.customer_id
+JOIN sales     s ON o.order_id    = s.order_id
+GROUP BY o.order_id, c.customer_name
+ORDER BY total_order_value DESC
+LIMIT 10;
 ```
 
 ---
