@@ -492,3 +492,23 @@ ORDER BY total_order_value DESC
 LIMIT 10;
 
 SELECT * FROM products;
+
+SELECT
+    product_id,
+    product_name,
+    category,
+    sub_category
+FROM products;
+
+SELECT DISTINCT category
+FROM products;
+
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT product_id) AS distinct_products
+FROM sales;
+
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT product_id) AS distinct_products
+FROM products;
