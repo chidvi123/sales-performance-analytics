@@ -1,3 +1,91 @@
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: #2d3748;
+    max-width: 850px;
+    margin: 0 auto;
+    padding: 30px;
+}
+h1, h2, h3, h4 {
+    color: #1a4f9c; /* Resume theme blue */
+    font-weight: 700;
+    margin-top: 28px;
+    margin-bottom: 12px;
+}
+h1 {
+    font-size: 2.2em;
+    border-bottom: 3px solid #1a4f9c;
+    padding-bottom: 8px;
+    text-align: center;
+    margin-bottom: 24px;
+}
+h2 {
+    font-size: 1.6em;
+    border-bottom: 2px solid #e1e4e8;
+    padding-bottom: 6px;
+    margin-top: 36px;
+}
+h3 {
+    font-size: 1.25em;
+    margin-top: 20px;
+}
+code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    background-color: #f6f8fa;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: #c7254e;
+}
+pre {
+    background-color: #2d3748; /* Premium dark background for SQL blocks */
+    color: #f7fafc;
+    border-radius: 6px;
+    padding: 18px;
+    overflow: auto;
+    margin: 16px 0;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+}
+pre code {
+    background-color: transparent;
+    padding: 0;
+    font-size: 0.85em;
+    color: #f7fafc;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 0.95em;
+}
+th, td {
+    border: 1px solid #dfe2e5;
+    padding: 12px 14px;
+    text-align: left;
+}
+th {
+    background-color: #f6f8fa;
+    color: #1a4f9c;
+    font-weight: 700;
+}
+tr:nth-child(even) {
+    background-color: #f8fafc;
+}
+blockquote {
+    border-left: 4px solid #1a4f9c;
+    padding: 12px 20px;
+    color: #4a5568;
+    background-color: #ebf8ff;
+    margin: 18px 0;
+    border-radius: 0 6px 6px 0;
+}
+/* Prevent page splits inside components */
+pre, table, blockquote {
+    page-break-inside: avoid;
+}
+</style>
+
 # 📊 Sales Performance Analytics: Ultimate Interview Study Guide (Session 1 & 2)
 
 This comprehensive guide is the consolidated study manual for your upcoming interviews. It preserves all technical notes from **Phases 1 to 3** and adds today's discussions on **Phase 4 (Advanced SQL queries)**, **Phase 5 (Power BI Data Modeling & Dashboards)**, and a **comprehensive interview question bank with model answers**.
