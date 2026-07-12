@@ -173,7 +173,46 @@ Transactional data in corporate environments is often stored in wide, flat CSV f
 - Date strings converted using `STR_TO_DATE(col, '%Y-%m-%d')`
 - Fully duplicate rows removed
 
-**Stage 3 · Load** — SQL ETL scripts migrate staging rows into the normalized Star Schema.
+**Stage 3 · Load (ETL SQL Ingestion Scripts)** — Five `INSERT INTO … SELECT` statements migrate clean staging data into the normalized target tables:
+
+```sql
+-- 1. Customers
+INSERT INTO customers (customer_id, customer_name, segment)
+SELECT customer_id, MIN(customer_name), MIN(segment)
+FROM superstore_raw GROUP BY customer_id;
+
+-- 2. Products (MIN resolves spelling duplicate PK violations)
+INSERT INTO products (product_id, product_name, category, sub_category)
+SELECT product_id, MIN(product_name), MIN(category), MIN(sub_category)
+FROM superstore_raw GROUP BY product_id;
+
+-- 3. Regions
+INSERT INTO regions (country, region, state, city, postal_code)
+SELECT DISTINCT country, region, state, city, postal_code
+FROM superstore_raw;
+
+-- 4. Orders (STR_TO_DATE casts text strings to proper DATE types)
+INSERT INTO orders (order_id, order_date, ship_date, ship_mode, customer_id, region_id)
+SELECT DISTINCT
+    s.order_id,
+    STR_TO_DATE(s.order_date, '%Y-%m-%d'),
+    STR_TO_DATE(s.ship_date,  '%Y-%m-%d'),
+    s.ship_mode, s.customer_id, r.region_id
+FROM superstore_raw s
+JOIN regions r
+    ON s.country = r.country AND s.region = r.region
+    AND s.state  = r.state  AND s.city   = r.city
+    AND s.postal_code = r.postal_code;
+
+-- 5. Sales (GROUP BY collapses duplicate composite-key rows)
+INSERT INTO sales (order_id, product_id, sales, quantity, discount, profit)
+SELECT order_id, product_id,
+       SUM(sales), SUM(quantity), AVG(discount), SUM(profit)
+FROM superstore_raw
+GROUP BY order_id, product_id;
+```
+
+> **B-Tree Index Note:** MySQL automatically creates B-Tree indexes on all `PRIMARY KEY` columns. This means joins on `customer_id`, `product_id`, `order_id`, and `region_id` run in **O(log N)** logarithmic time instead of a slow O(N) full table scan — making all analytical queries respond in milliseconds.
 
 **Stage 4 · Analyze** — 30 business queries extract KPIs, trends, rankings, and segment insights.
 
@@ -211,13 +250,8 @@ The raw `superstore_raw` table suffered from the classic three database anomalie
 
 ```text
   ┌──────────────────┐           ┌──────────────────┐
-  │    customers     │           │     regions       │
+  │    customers     │           │     regions      │
   ├──────────────────┤           ├──────────────────┤
-  │ PK customer_id   │           │ PK region_id      │
-  │    customer_name │           │    country        │
-  │    segment       │           │    region         │
-  └────────┬─────────┘           │    state          │
-           │ 1:N                 │    city           │
   │ PK customer_id   │           │ PK region_id     │
   │    customer_name │           │    country       │
   │    segment       │           │    region        │
@@ -228,20 +262,19 @@ The raw `superstore_raw` table suffered from the classic three database anomalie
   │          orders              │ 1:N              │
   ├──────────────────────────────┘                  │
   │ PK order_id                  ◀──────────────────┘
-   │    order_date, ship_date
-   │    ship_mode
-   │ FK customer_id, region_id
-   └────────┬─────────┐
-            │ 1:N     │
-   ┌────────▼───────────────────┐   ┌──────────────────┐
-   │      sales (Fact)          │   │     products     │
-   ├────────────────────────────┤   ├──────────────────┤
-   │ PK,FK order_id             │   │ PK product_id    │
-   │ PK,FK product_id ◀─────────┤1:N│    product_name  │
-   │       sales                │   │    category      │
-   │       quantity             │   │    sub_category  │
-   │       discount, profit     │   └──────────────────┘
-   └────────────────────────────┘
+  │    order_date, ship_date                         ┌──────────────────┐
+  │    ship_mode                                     │     products     │
+  │ FK customer_id, region_id                        ├──────────────────┤
+  └────────┬─────────┐                               │ PK product_id    │
+           │ 1:N     │                           1:N │    product_name  │
+  ┌────────▼─────────▼─────────────────────────────▶ │    category      │
+  │         sales (Fact)          │                  │    sub_category  │
+  ├────────────────────────────────┤                 └──────────────────┘
+  │ PK,FK order_id                 │
+  │ PK,FK product_id               │
+  │       sales, quantity          │
+  │       discount, profit         │
+  └────────────────────────────────┘
 ```
 
 ---
@@ -527,6 +560,22 @@ LIMIT 10;
 
 ## 📊 Power BI Model & Dashboard
 
+### Relationships (Star Schema — Single Direction)
+
+- `customers` (1) → (N) `orders`
+- `regions` (1) → (N) `orders`
+- `orders` (1) → (N) `sales` (Fact)
+- `products` (1) → (N) `sales` (Fact)
+
+All filter directions set to **Single (one-directional)** to prevent circular dependency loops and ensure fast model recalculation.
+
+### Import Mode vs DirectQuery
+
+| Mode | How it works | When to use |
+| :--- | :--- | :--- |
+| **Import Mode** ✅ (what we used) | Power BI copies data into RAM and uses the **VertiPaq columnar compression engine** (up to 10× file size reduction). Dashboard interactions are instant. | Small-to-medium datasets where speed matters |
+| **DirectQuery** | Every visual click fires a live query to the MySQL server. Much slower; strains the database. | Real-time data requirements only |
+
 ### DAX Measures
 
 | Measure | Formula |
@@ -537,7 +586,7 @@ LIMIT 10;
 | `Profit Margin %` | `DIVIDE([Total Profit], [Total Sales], 0) * 100` |
 | `Average Order Value` | `DIVIDE([Total Sales], [Total Orders], 0)` |
 
-> **Note:** `DIVIDE` is used instead of `/` to safely return `0` when the denominator is zero — preventing dashboard visual crashes when filters reduce data to empty sets.
+> **Why `DIVIDE` not `/`?** The `/` operator crashes visuals with `NaN` when the denominator is zero. `DIVIDE` safely returns `0` or `BLANK` — keeping the dashboard clean under all filter states.
 
 ### Dashboard Preview
 
@@ -578,6 +627,66 @@ LIMIT 10;
 ### 4. Many-to-Many Ambiguity in Power BI
 - **Problem:** Multiple join paths between tables created circular dependencies.
 - **Solution:** Strict Star Schema — all relationships flow one-way from dimensions to the fact table.
+
+---
+
+## 🎙️ Interview Question Bank & Model Answers
+
+### Q1: Why Star Schema over Snowflake Schema or a single wide table?
+> **Fewer joins:** Dimension tables stay denormalized so analytical queries need fewer joins than a Snowflake Schema.
+> **Dashboard performance:** Power BI is natively optimized for Star Schemas — filter direction flows unidirectionally from lookups to facts.
+> **Anomalies eliminated:** A single wide table suffers insertion, update, and deletion anomalies. The Star Schema removes all three.
+
+### Q2: How did you handle dirty data — spelling conflicts in product names?
+> During ETL, the same `product_id` appeared with multiple name spellings due to typos. A simple `SELECT DISTINCT product_id, product_name` returned duplicate rows → primary key violation.
+> **Fix:** `GROUP BY product_id` + `MIN(product_name)` — selecting the alphabetical minimum guarantees exactly one canonical name per ID. Trailing whitespaces in IDs were also fixed via Python `.str.strip()` to prevent silent join failures.
+
+### Q3: Why did you use `STR_TO_DATE` instead of importing dates directly?
+> Raw CSV dates were stored as VARCHAR strings. MySQL cannot index strings chronologically. We imported dates as VARCHAR into the staging table, then cast them to proper `DATE` types using `STR_TO_DATE(order_date, '%Y-%m-%d')` during ETL migration — enabling fast date-based indexing and range queries.
+
+### Q4: When would you use a CTE instead of a subquery?
+> **Readability:** A CTE defines a named, reusable temporary result set at the top of the query — much easier to read and maintain than deeply nested parenthetical subqueries.
+> **Recursion:** CTEs support `WITH RECURSIVE` for hierarchical data (org charts, bill of materials) — subqueries cannot do this.
+
+### Q5: Why can't you use a window function in the `WHERE` clause?
+> SQL's evaluation order is strict:
+> `FROM → JOIN → WHERE → GROUP BY → HAVING → SELECT → WINDOW → ORDER BY`
+>
+> `WHERE` is evaluated **before** window functions are calculated, so the database has no window results yet at that stage. Solution: wrap the query in a CTE or subquery and filter in the outer query.
+
+### Q6: What is the difference between `RANK()`, `DENSE_RANK()`, and `ROW_NUMBER()`?
+
+| Function | Tied Input | Output | Behavior |
+| :--- | :--- | :--- | :--- |
+| `ROW_NUMBER()` | A, A, B | 1, 2, 3 | Always unique — no ties allowed |
+| `RANK()` | A, A, B | 1, 1, 3 | Ties share rank, skips next number |
+| `DENSE_RANK()` | A, A, B | 1, 1, 2 | Ties share rank, does NOT skip |
+
+### Q7: Explicit vs. Implicit measures in Power BI?
+> An **implicit measure** is auto-created when you drag a number column onto a visual. An **explicit measure** is a DAX formula you write yourself (e.g., `Total Sales = SUM(sales[sales])`). Explicit measures are best practice — reusable, maintainable, and handle edge cases like division-by-zero.
+
+### Q8: Why `DIVIDE` instead of `/` in DAX?
+> The `/` operator returns `NaN` or crashes a visual if the denominator is zero (e.g., when filters reduce data to nothing). `DIVIDE([Total Profit], [Total Sales], 0)` safely returns `0` or `BLANK` — keeping the dashboard stable under all filter states.
+
+### Q9: Furniture has high sales but low profit — what actions do you recommend?
+> This is exactly what our data showed (~$742k revenue, ~$18k profit for Furniture vs ~$145k for Technology).
+> 1. **Cap discounts** at 15% maximum (currently going up to 45%).
+> 2. **Renegotiate Standard Class freight rates** (Standard Class handles 60%+ of all Furniture shipments).
+> 3. **Pass shipping costs to buyers** for heavy Furniture items instead of absorbing them in the base price.
+
+### Q10: What is the significance of the composite primary key in `sales`?
+> The `sales` table is the bridge table resolving the many-to-many relationship between `orders` and `products`. The composite PK `(order_id, product_id)` ensures each row = one unique product line item in one specific order. It enforces referential integrity and prevents duplicate transaction lines from being inserted.
+
+### Q11: How do you optimize joining large tables?
+> 1. **Join on indexed keys** (PKs and FKs) — MySQL uses B-Tree indexes → O(log N) lookups.
+> 2. **Filter before joining** — apply `WHERE` conditions inside subqueries to reduce the data volume going into joins.
+> 3. **Select specific columns** — avoid `SELECT *`; selecting only needed columns reduces memory footprint.
+> 4. **Use `EXPLAIN`** — MySQL's `EXPLAIN` keyword shows the query execution plan so you can verify it uses Index Scans not Full Table Scans.
+
+### Q12: How would you scale this to millions of daily transactions?
+> 1. **Cloud Data Warehouse** — migrate MySQL to Snowflake or Google BigQuery for massively parallel processing (MPP).
+> 2. **dbt (Data Build Tool)** — modularize SQL transformations, add data lineage tracking, and enforce automated quality tests.
+> 3. **Apache Airflow** — orchestrate the pipeline, scheduling extractions, warehouse loads, and dbt runs with automated error alerts.
 
 ---
 
